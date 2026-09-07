@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Runtime outputs
+output/
+outputs/
+runs/
+*.avi
+*.mkv
+
+# Large media (keep samples out of git; mount locally / Docker volumes)
+data/raw/
+data/videos/
+*.mp4
+*.mov
+*.MP4
+
+# Model weights downloaded at build time can be large; keep a placeholder
+weights/*.pt
+weights/*.pth
+weights/*.onnx
+!weights/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
