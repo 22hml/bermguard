@@ -119,9 +119,10 @@ def _process_video(
             frame_height=height,
             override=mpp_running if mpp_running is not None else meters_per_pixel,
         )
-        # Congelar escala tras primeras observaciones con vehículos
-        if meters_per_pixel is None and detections and mpp_running is None:
-            mpp_running = mpp
+        # Congelar escala: preferir primera observación con vehículos; si no, primer frame
+        if mpp_running is None:
+            if detections or idx == 0:
+                mpp_running = mpp
         if mpp_running is not None:
             mpp = mpp_running
 
