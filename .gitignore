@@ -27,6 +27,7 @@ htmlcov/
 
 # Runtime outputs
 output/
+output_docker/
 outputs/
 runs/
 *.avi

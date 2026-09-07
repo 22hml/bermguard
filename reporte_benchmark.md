@@ -19,20 +19,47 @@ Comparar al menos dos enfoques para segmentación/estimación de pretil y apoyo 
 - Sin red neuronal → baseline liviano para trade-off FPS/VRAM.
 - No genera detecciones vehiculares (el mapa espacial queda vacío o casi vacío).
 
-## Smoke test local (Apple M4, 15 frames / video)
+## Benchmark completo (Apple M4 · MPS · sin `--max-frames`)
 
-| Video | Método | Throughput ef. (FPS) | Altura media est. (m) |
-|-------|--------|----------------------|------------------------|
-| video_01 | 1 (MPS) | ~1.6* | ~1–3 (post-calibración de banda) |
-| video_02 | 1 | ~23 | idem |
-| video_03 | 1 | ~14 | idem |
-| video_04 | 1 | ~30 | idem |
-| video_01 | 2 (CPU) | ~25 | ~1–3 |
-| video_02–04 | 2 | ~65–70 | ~1–3 |
+Videos ~10 s c/u (`video_01` 302@30fps; `02–04` 240@24fps). Artefactos en `output/`.
 
-\*El primer video absorbe cold-start de YOLO/MPS; en régimen el throughput sube.
+| Video | Método | Throughput (FPS) | Altura media (m) | Alertas | Notas |
+|-------|--------|------------------|------------------|---------|-------|
+| video_01 | 1 | 14.38 | 0.99 | 297 | Banda crest/toe visible; muchas alertas PRETIL BAJO |
+| video_01 | 2 | 22.49 | 0.95 | 266 | Solo geométrico |
+| video_02 | 1 | 29.80 | 2.44 | 68 | Escala m/px por neumático (~0.081); serie ruidosa |
+| video_02 | 2 | 51.18 | 1.09 | 156 | Fallback m/px fijo (~0.021) |
+| video_03 | 1 | 31.72 | 1.16 | 136 | Polvo; conf. YOLO baja en algunos frames |
+| video_03 | 2 | 50.77 | 0.93 | 208 | — |
+| video_04 | 1 | 31.89 | 1.04 | 194 | Bulldozer a veces etiquetado como CAEX |
+| video_04 | 2 | 49.88 | 1.20 | 129 | — |
 
-> Re-ejecutar sin `--max-frames` antes de la entrega para completar esta tabla con valores definitivos y VRAM (`nvidia-smi` en el runner CUDA de evaluación).
+Guía operativa registrada: `guideline_min_berm_m = 2.0` (50% diámetro neumático 4.0 m). Alerta PRETIL BAJO si estimación &lt; ~75% de esa guía.
+
+### Validación Docker (Linux/amd64 + CUDA image)
+
+- Build OK: `docker build --platform linux/amd64 -t deliryum/bermguard:latest .`
+- Smoke OK (5 frames × 4 videos, `--device cpu`): OSD + plots + `metadata.json` en `output_docker/`
+- Pin `numpy<2` requerido por PyTorch 2.2 de la imagen base
+- En Mac no hay `--gpus`; el runner de evaluación Deliryum debe usar `docker run --gpus all`
+
+VRAM CUDA: medir en el runner de evaluación con `nvidia-smi` (no disponible en Apple Silicon).
+
+## Observaciones de calidad visual (OSD)
+
+**Lo que funciona bien**
+
+- Método 1 dibuja cajas CAEX, IDs de track, semáforo de proximidad y overlay `method`/`light`.
+- En `video_01` la banda de pretil (crest/toe) se alinea con el cordón del botadero en varios frames (~0.8–1.1 m).
+- Plots de trayectoria espacial (método 1) muestran paths coherentes en el tiempo.
+- Throughput en régimen ≥ ~30 FPS (método 1) / ≥ ~50 FPS (método 2) en videos 02–04.
+
+**Debilidades honestas**
+
+- La altura monocular es **inestable frame-a-frame** (picos al techo ~3.5 m y caídas a pocos píxeles cuando el ridge se pierde por polvo o vehículos en primer plano).
+- Escala `meters_per_pixel` depende del video (fallback fijo vs proxy de neumático) → medias no son estrictamente comparables entre clips.
+- YOLO COCO confunde / pierde bulldozer bajo polvo; IDs de track se fragmentan → falsas alertas de proximidad crítica entre “dobles” del mismo vehículo.
+- Método 2 no aporta valor de negocio en detección/proximidad; solo techo de FPS y ablación geométrica.
 
 ## Trade-offs
 
@@ -40,10 +67,10 @@ Comparar al menos dos enfoques para segmentación/estimación de pretil y apoyo 
 |----------|----------|----------|
 | Detección maquinaria | Sí | No |
 | Semáforo proximidad | Sí | No (sin tracks) |
-| FPS | Medio | Alto |
-| VRAM | ~requiere GPU para producción | CPU suficiente |
+| FPS | Medio (~14–32 MPS) | Alto (~22–51 MPS) |
+| VRAM | Requiere GPU en producción | CPU suficiente |
 | Robustez noche/polvo | Mejor con CLAHE + detector | Frágil si el ridge desaparece |
-| Altura pretil | Comparable al clásico + ancla | Baseline geométrico |
+| Altura pretil | Comparable + ancla a bbox | Baseline geométrico |
 
 ## Hiperparámetros relevantes
 
@@ -60,6 +87,13 @@ Comparar al menos dos enfoques para segmentación/estimación de pretil y apoyo 
 - fallback diagnóstico si el detector falla,
 - y ablación del módulo geométrico.
 
+Mejoras prioritarias post-entrega (si hay iteración):
+
+1. Suavizado temporal / Kalman en altura de pretil  
+2. Fine-tune o clases mineras (CAEX vs bulldozer)  
+3. Calibración de cámara o escala por escena fija para comparar videos  
+4. TensorRT / half-precision en el runner CUDA  
+
 En un despliegue industrial real, la medición metrológica del pretil debería respaldarse con **LiDAR / stereo**; la cámara aporta cobertura, tracking y alertas tempranas sobre infraestructura existente (alineado al producto Deliryum).
 
 ## Limitaciones honestas
@@ -67,4 +101,4 @@ En un despliegue industrial real, la medición metrológica del pretil debería 
 - Escala monocular aproximada; no sustituye topografía.
 - YOLO COCO no está fine-tuned a CAEX/bulldozer de faena.
 - Videos de muestra sintéticos / controlados; la evaluación ciega puede diferir.
-- Sin TensorRT en esta entrega (margen CUDA runtime genérica).
+- Sin TensorRT en esta entrega (imagen CUDA runtime genérica).
