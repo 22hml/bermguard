@@ -47,3 +47,4 @@ weights/*.onnx
 
 # Jupyter
 .ipynb_checkpoints/
+data/
