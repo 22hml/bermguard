@@ -45,12 +45,16 @@ def proximity_level(
     if len(detections) < 2:
         return "green", None, []
 
+    # Distancia entre puntos de contacto aprox. con el suelo (bottom-center),
+    # no el centro visual del bbox (sesgado por altura aparente).
     min_dist: float | None = None
     pair: tuple[BBox, BBox] | None = None
     for i in range(len(detections)):
         for j in range(i + 1, len(detections)):
             a, b = detections[i], detections[j]
-            dist = ((a.cx - b.cx) ** 2 + (a.cy - b.cy) ** 2) ** 0.5
+            dist = (
+                (a.ground_cx - b.ground_cx) ** 2 + (a.ground_cy - b.ground_cy) ** 2
+            ) ** 0.5
             if min_dist is None or dist < min_dist:
                 min_dist = dist
                 pair = (a, b)

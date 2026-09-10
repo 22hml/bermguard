@@ -2,89 +2,103 @@
 
 ## Objetivo
 
-Comparar dos enfoques de estimación de pretil (y apoyo a detección vehicular) bajo variaciones de iluminación, y justificar el método recomendado para producción (precisión vs FPS/VRAM).
+Comparar dos estrategias de **estimación de pretil** bajo variaciones de iluminación, con **detección/tracking vehicular compartidos**, y justificar el método recomendado (precisión vs FPS/VRAM).
 
-## Métodos
+## Diseño experimental
 
-### Método 1 — YOLO vehículos + YOLO-seg pretil
+> La detección y el tracking vehicular son módulos compartidos. Los métodos 1 y 2 comparan específicamente dos estrategias alternativas de estimación del pretil.
 
-- **Detección:** YOLOv8n (COCO) → clases vehiculares mapeadas a CAEX / bulldozer / vehicle.
-- **Tracking:** IoU greedy frame-a-frame.
-- **Pretil:** YOLOv8n-seg fine-tuned sobre frames anotados de los videos del brief (`weights/berm_yolov8n_seg.pt`). Cresta y base derivadas de la máscara;  
-  \(H = y_{\mathrm{base}} - y_{\mathrm{cresta}}\) (mediana a lo largo del cordón).
-- **Fallback:** si no hay pesos de seg, perfil clásico OpenCV (borde ≠ cordón; estados `detected` / `edge_only` / `unknown`).
-- **Proximidad:** semáforo por distancia entre centros de bbox (umbrales en px sin calibración métrica).
-- **Metros:** solo con `--meters-per-pixel` explícito.
+| Componente | Método 1 | Método 2 |
+|------------|----------|----------|
+| YOLO vehículos (COCO → `heavy_vehicle`) | Sí | Sí |
+| Tracking IoU + proximidad (bottom-center) | Sí | Sí |
+| Mapa espacial / OSD / metadata | Sí | Sí |
+| Pretil | YOLO-seg fine-tuned | OpenCV clásico |
 
-### Método 2 — OpenCV clásico
+### Método 1 — YOLO-seg pretil
 
-- CLAHE + Sobel-Y + perfil de cresta/rasante en ROI.
-- Sin red neuronal → baseline liviano (techo de FPS / ablación).
-- No genera detecciones vehiculares (mapa espacial vacío o casi vacío).
+- Pesos: `weights/berm_yolov8n_seg.pt` (YOLOv8n-seg sobre frames anotados del brief).
+- Cresta/base derivadas de la máscara; \(H = y_{\mathrm{base}} - y_{\mathrm{cresta}}\) (mediana del cordón).
+- Fallback clásico si faltan pesos.
+- Filtro de espesor + restar máscaras de vehículos + filtro temporal (confirm 2 / clear 2).
 
-## Resultados (samples del brief)
+### Método 2 — OpenCV clásico (ablación)
 
-Corridas locales Apple Silicon (MPS) y validación Docker (linux/amd64, CPU smoke). Artefactos de referencia en `output/`.
+- CLAHE + Sobel-Y + perfil cresta/rasante en ROI.
+- Mismo detector: aísla el efecto del estimador de pretil y aporta techo de FPS relativo.
 
-### Throughput (método 1 vs 2, videos completos · MPS · corrida de entrega)
+### Detección vehicular (honestidad)
 
-| Video | Método 1 (FPS) | Método 2 (FPS) | Detect rate M1 | Altura media M1 (px) |
-|-------|----------------|----------------|----------------|----------------------|
-| video_01 | ~5–14* | ~20 | ~96% | ~72 |
-| video_02 | ~18 | ~34 | ~94% | ~44 |
-| video_03 | ~19 | ~35 | ~78% | ~54 |
-| video_04 | ~21 | ~36 | ~89% | ~55 |
+YOLOv8n-COCO no clasifica CAEX vs bulldozer. Las detecciones compatibles se etiquetan `heavy_vehicle`. Diferenciación minera fiable → fine-tune dedicado (roadmap).
 
-\*Variación MPS/carga térmica en video_01 (1080p); en régimen suele situarse ~14 FPS. Método 2 es ~1.5–2× más rápido y no cubre maquinaria ni proximidad.
+### Proximidad y metros
 
-Validación seg (hold-out interno del dataset bootstrap): mask mAP50 del orden ~0.7–0.95 según partición; **N pequeño** → no interpretar como GT industrial.
+- Proximidad: distancia entre bottom-centers (px). Proxy visual, no métrica.
+- `--meters-per-pixel`: conversión aproximada solo con escala local / escena rectificada; **no** corrige perspectiva global.
 
-### Docker
+## Resultados (corrida de entrega · MPS · detector compartido · `output/`)
 
-- Build: `docker build -t bermguard:latest .` (pesos en imagen; sin red en runtime).
-- Smoke: `--device cpu --max-frames 5` en amd64.
-- Pin `numpy>=1.24,<2` por compatibilidad con PyTorch 2.2 de la imagen base.
+Fuente: `metadata.json` por corrida. `avg_throughput_fps` = **FPS end-to-end** (decode + inferencia + OSD + encode MP4), no solo latencia del modelo.
+
+| Video | Resolución | Frames | Método | FPS end-to-end | Detect rate pretil | Altura media (px) | wall_time_s |
+|-------|------------|-------:|--------|---------------:|-------------------:|------------------:|------------:|
+| video_01 | 1920×1080 | 302 | 1 | 5.096 | 96.0% | 72.2 | 59.263 |
+| video_01 | 1920×1080 | 302 | 2 | 16.826 | 47.4% | 29.3 | 17.948 |
+| video_02 | 1280×720 | 240 | 1 | 19.285 | 93.8% | 43.5 | 12.445 |
+| video_02 | 1280×720 | 240 | 2 | 24.941 | 54.2% | 17.1 | 9.623 |
+| video_03 | 1280×720 | 240 | 1 | 19.854 | 77.9% | 53.5 | 12.088 |
+| video_03 | 1280×720 | 240 | 2 | 27.536 | 28.3% | 33.1 | 8.716 |
+| video_04 | 1280×720 | 240 | 1 | 20.957 | 88.7% | 55.4 | 11.452 |
+| video_04 | 1280×720 | 240 | 2 | 25.223 | 39.6% | 24.4 | 9.515 |
+
+Ratio FPS M2/M1 (misma corrida, detector compartido): video_01 \(16.826/5.096 \approx 3.30\times\); 720p \(\approx 1.20\text{–}1.39\times\). El sobrecosto de M1 es principalmente la segmentación de pretil.
+
+### Entrenamiento YOLO-seg (verificación funcional)
+
+- Épocas / imgsz / batch / seed: ver `scripts/train_berm_seg.py` (defaults: 80, 640, 4, seed=42).
+- Split: aleatorio por frames (`val_ratio=0.2`) sobre las mismas cuatro secuencias.
+- **Limitación:** frames consecutivos están altamente correlacionados → riesgo de *data leakage* temporal. El mAP de validación **no** es una estimación confiable de generalización industrial; se reporta solo como chequeo de que el entrenamiento convergió.
+- Preferible en iteraciones futuras: leave-one-video-out (entrenar 01–03, validar 04).
 
 ## Trade-offs
 
-| Criterio | Método 1 | Método 2 |
-|----------|----------|----------|
-| Detección maquinaria | Sí | No |
-| Semáforo proximidad | Sí | No |
-| Pretil (seg entrenada) | Sí (si hay pesos) | Perfil clásico |
-| FPS | Medio | Alto |
-| VRAM | GPU recomendada | CPU suficiente |
-| Robustez noche/polvo | Mejor | Frágil si el ridge desaparece |
+| Criterio | Método 1 (seg) | Método 2 (OpenCV) |
+|----------|----------------|-------------------|
+| Tasa de detección de pretil | Alta en samples | Menor / más frágil |
+| Robustez noche/polvo | Mejor | Depende del ridge |
+| FPS end-to-end | Menor (costo seg) | Mayor |
+| VRAM | GPU recomendada | Misma detección + OpenCV liviano |
 
 ## Hiperparámetros
 
 - YOLO detect: `conf=0.25`, `iou=0.45`, `imgsz=640`, `yolov8n.pt`
-- YOLO-seg pretil: `conf≈0.15`, filtro de espesor (rechaza muros/horizonte), enmascara vehículos
-- Proximidad: amarillo ≤ 180 px, rojo ≤ 90 px (centros de bbox)
-- Temporal: confirmación 2 frames / clear 2 frames
-- Escala opcional: `--meters-per-pixel`; guía operativa 2.0 m (50% diámetro neumático 4.0 m) solo si hay metros
+- YOLO-seg pretil: `conf≈0.15`, filtro de espesor, enmascara vehículos
+- Proximidad: amarillo ≤ 180 px, rojo ≤ 90 px (bottom-centers)
+- Temporal: confirmación 2 / clear 2 frames
+- Guía operativa 2.0 m (50% de Ø neumático 4.0 m) **solo** si hay metros calibrados
+
+## Docker
+
+- Build: `docker build -t bermguard:latest .` (pesos en imagen; sin red en runtime).
+- `CMD` por defecto; **sin `ENTRYPOINT`** → compatible con `docker run … python main.py …`.
+- Validado: build + CPU en `linux/amd64`. **CUDA end-to-end no validado** en host NVIDIA físico.
+- Pin `numpy>=1.24,<2` por compatibilidad con PyTorch 2.2 de la imagen base.
 
 ## Recomendación de producción
 
-**Método 1**, porque cubre el flujo completo del brief (maquinaria + proximidad + pretil). El método 2 queda como:
-
-- techo de FPS,
-- fallback diagnóstico,
-- ablación del módulo geométrico.
+**Método 1** para el estimador de pretil (mejor detect rate y robustez en samples). Método 2 como ablación y referencia de costo/FPS del módulo geométrico.
 
 ### Roadmap
 
-1. Más anotaciones frame-a-frame y negativos (pista / polvo)  
+1. Más anotaciones y negativos (pista / polvo); split por video  
 2. Fine-tune detector a CAEX vs bulldozer  
-3. Calibración de cámara o escala fija por escena  
+3. Calibración / homografía por escena  
 4. TensorRT / half-precision en CUDA  
-
-En faena, la metrología del pretil debería respaldarse con **LiDAR / stereo**; la cámara aporta cobertura, tracking y alertas sobre infraestructura existente.
+5. LiDAR / stereo para metrología absoluta  
 
 ## Limitaciones
 
 - Altura monocular aproximada; no sustituye topografía.
-- Dataset de seg acotado a los 4 videos del brief → riesgo de sobreajuste a esas cámaras.
-- YOLO COCO no fine-tuned a equipos mineros; tracks pueden fragmentarse.
-- Sin calibración, proximidad y altura en **píxeles**, no metros absolutos.
-- Sin TensorRT en la imagen actual (CUDA runtime genérica).
+- Dataset de seg acotado a los 4 videos del brief.
+- COCO → `heavy_vehicle` sin taxonomía minera.
+- Sin calibración: proximidad y altura en píxeles.

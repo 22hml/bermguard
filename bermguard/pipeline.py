@@ -48,10 +48,9 @@ def run_pipeline(
     else:
         methods = [method]
 
-    detector: YoloVehicleDetector | None = None
-    if "1" in methods:
-        wpath = ensure_weights(weights_path)
-        detector = YoloVehicleDetector(weights_path=wpath, device=device)
+    # Detector vehicular compartido: M1/M2 solo cambian la estimación de pretil.
+    wpath = ensure_weights(weights_path)
+    detector = YoloVehicleDetector(weights_path=wpath, device=device)
 
     # Solo calibración explícita publica metros
     scale_valid = meters_per_pixel is not None and meters_per_pixel > 0
@@ -66,7 +65,7 @@ def run_pipeline(
                 meters_per_pixel=meters_per_pixel,
                 scale_valid=scale_valid,
                 max_frames=max_frames,
-                device=device if detector is None else detector.device,
+                device=detector.device,
                 berm_seg_weights=berm_seg_weights,
             )
 
@@ -75,7 +74,7 @@ def _process_video(
     video_path: Path,
     output_dir: Path,
     method: str,
-    detector: YoloVehicleDetector | None,
+    detector: YoloVehicleDetector,
     meters_per_pixel: float | None,
     scale_valid: bool,
     max_frames: int | None,
@@ -117,11 +116,8 @@ def _process_video(
         lighting = estimate_lighting_regime(frame)
         timestamp = idx / fps if fps > 0 else float(idx)
 
-        detections = []
-        if method == "1":
-            assert detector is not None
-            detections = detector.detect(enhanced)
-            detections = tracker.update(detections)
+        assert detector is not None
+        detections = tracker.update(detector.detect(enhanced))
 
         # Escala solo para uso métrico si hay calibración explícita
         mpp_for_metric = meters_per_pixel if scale_valid else None
@@ -136,10 +132,12 @@ def _process_video(
                 device=device,
             )
         else:
+            # Ablación: mismo detector; solo cambia el estimador de pretil.
             berm = estimate_berm_classical(
                 enhanced,
                 meters_per_pixel=mpp_for_metric,
                 scale_valid=scale_valid,
+                detections=detections,
             )
         berm = berm_filter.update(berm)
         if berm.status == "detected":
@@ -254,8 +252,10 @@ def _process_video(
             "spatial_plot": "vehicle_spatial_distribution.png",
         },
         "notes": (
+            "Detección/tracking vehicular compartidos entre métodos; "
+            "solo cambia el estimador de pretil (1=YOLO-seg, 2=OpenCV). "
+            "Proximidad: distancia entre bottom-centers de bbox (px). "
             "height_m solo si --meters-per-pixel explícito; "
-            "pretil vía YOLO-seg si weights/berm_yolov8n_seg.pt existe; "
             "unknown no inventa polígono."
         ),
         "berm_seg_weights": (

@@ -33,21 +33,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="1",
         choices=["1", "2", "all"],
-        help="Método: 1=YOLO+seg pretil, 2=clásico OpenCV, all=ambos.",
+        help=(
+            "Estrategia de pretil (detector vehicular compartido): "
+            "1=YOLO-seg, 2=OpenCV clásico, all=ambos."
+        ),
     )
     parser.add_argument(
         "--weights",
         type=Path,
         default=Path("weights/yolov8n.pt"),
-        help="Ruta a pesos YOLO (método 1).",
+        help="Pesos YOLO de detección vehicular (compartidos por M1 y M2).",
     )
     parser.add_argument(
         "--meters-per-pixel",
         type=float,
         default=None,
         help=(
-            "Escala monocular opcional (m/px). "
-            "Si se omite, se estima con referencia de neumático/CAEX."
+            "Escala monocular opcional (m/px) para una ROI/escena rectificada. "
+            "Si se omite, la altura se reporta en píxeles (sin inventar metros)."
         ),
     )
     parser.add_argument(

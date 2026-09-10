@@ -78,8 +78,8 @@ def plot_spatial_distribution(frames: list[FrameResult], out_path: Path) -> None
     ts: list[float] = []
     for fr in frames:
         for det in fr.detections:
-            xs.append(det.cx)
-            ys.append(det.cy)
+            xs.append(det.ground_cx)
+            ys.append(det.ground_cy)
             ts.append(fr.timestamp_s)
 
     fig, ax = plt.subplots(figsize=(8, 6))

@@ -28,6 +28,15 @@ class BBox:
         return 0.5 * (self.y1 + self.y2)
 
     @property
+    def ground_cx(self) -> float:
+        """Aprox. contacto con el suelo: centro inferior del bbox."""
+        return 0.5 * (self.x1 + self.x2)
+
+    @property
+    def ground_cy(self) -> float:
+        return self.y2
+
+    @property
     def width(self) -> float:
         return max(0.0, self.x2 - self.x1)
 

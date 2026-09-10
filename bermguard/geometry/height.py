@@ -16,7 +16,9 @@ def estimate_meters_per_pixel(
     if override is not None and override > 0:
         return override
 
-    truck_like = [d for d in detections if d.cls_name in {"CAEX", "truck", "vehicle"}]
+    truck_like = [
+        d for d in detections if d.cls_name in {"heavy_vehicle", "truck", "vehicle"}
+    ]
     if truck_like:
         tallest = max(truck_like, key=lambda d: d.height)
         if tallest.height > 10:

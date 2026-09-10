@@ -59,7 +59,8 @@ class YoloVehicleDetector:
             area = float((x2 - x1) * (y2 - y1))
             if name not in _VEHICLE_CLASS_NAMES and area < 8000:
                 continue
-            label = _map_industrial_label(name, area)
+            # COCO no distingue CAEX vs bulldozer; etiqueta genérica honesta.
+            label = _map_vehicle_label(name, area)
             boxes.append(
                 BBox(
                     x1=float(x1),
@@ -73,13 +74,10 @@ class YoloVehicleDetector:
         return boxes
 
 
-def _map_industrial_label(coco_name: str, area: float) -> str:
-    if coco_name == "truck" or area > 40000:
-        return "CAEX"
-    if coco_name in {"car", "bus"} and area > 15000:
-        return "bulldozer"
-    if coco_name in _VEHICLE_CLASS_NAMES:
-        return "CAEX" if coco_name == "truck" else coco_name
+def _map_vehicle_label(coco_name: str, area: float) -> str:
+    """Normaliza clases COCO a heavy_vehicle (sin fingir taxonomía minera)."""
+    if coco_name in _VEHICLE_CLASS_NAMES or area >= 8000:
+        return "heavy_vehicle"
     return "vehicle"
 
 

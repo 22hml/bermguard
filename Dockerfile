@@ -31,5 +31,7 @@ COPY main.py /app/main.py
 COPY README.md /app/README.md
 COPY reporte_benchmark.md /app/reporte_benchmark.md
 
-# Override: python main.py --input /app/test --output /app/output --method 1
+# Sin ENTRYPOINT: el brief puede hacer
+#   docker run ... bermguard:latest python main.py --input ... --output ... --method 1
+# Sin override se usa este CMD por defecto.
 CMD ["python", "main.py", "--input", "/app/test", "--output", "/app/output", "--method", "1"]
