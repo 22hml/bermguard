@@ -36,12 +36,19 @@ YOLOv8n-COCO no clasifica CAEX vs bulldozer. Las detecciones compatibles se etiq
 - Proximidad: distancia entre bottom-centers (px). Proxy visual, no métrica.
 - `--meters-per-pixel`: conversión aproximada solo con escala local / escena rectificada; **no** corrige perspectiva global.
 
-## Resultados (corrida de entrega · MPS · detector compartido · `output/`)
+## Resultados (corrida de entrega · detector compartido · `output/`)
 
-Fuente: `metadata.json` por corrida. `avg_throughput_fps` = **FPS end-to-end** (decode + inferencia + OSD + encode MP4), no solo latencia del modelo.
+### Hardware y entorno
 
-| Video | Resolución | Frames | Método | FPS end-to-end | Detect rate pretil | Altura media (px) | wall_time_s |
-|-------|------------|-------:|--------|---------------:|-------------------:|------------------:|------------:|
+Benchmarks de la tabla ejecutados en **Apple Silicon (MPS)**. El contenedor `linux/amd64` se validó con smoke test en **CPU**. La ruta **CUDA** está configurada en la imagen, pero **no** se validó end-to-end por no disponer de un host NVIDIA.
+
+Fuente: `metadata.json` por corrida.
+
+- `avg_throughput_fps` = **FPS end-to-end** (decode + inferencia + OSD + encode MP4).
+- `Berm detection rate` = fracción de frames con `berm.status == "detected"` (**pretil**, no vehículos). El detector vehicular es el mismo en M1 y M2; por eso estas tasas pueden diferir entre métodos.
+
+| Video | Resolución | Frames | Método | FPS end-to-end | Berm detection rate | Altura media (px) | wall_time_s |
+|-------|------------|-------:|--------|---------------:|--------------------:|------------------:|------------:|
 | video_01 | 1920×1080 | 302 | 1 | 5.096 | 96.0% | 72.2 | 59.263 |
 | video_01 | 1920×1080 | 302 | 2 | 16.826 | 47.4% | 29.3 | 17.948 |
 | video_02 | 1280×720 | 240 | 1 | 19.285 | 93.8% | 43.5 | 12.445 |
@@ -51,7 +58,7 @@ Fuente: `metadata.json` por corrida. `avg_throughput_fps` = **FPS end-to-end** (
 | video_04 | 1280×720 | 240 | 1 | 20.957 | 88.7% | 55.4 | 11.452 |
 | video_04 | 1280×720 | 240 | 2 | 25.223 | 39.6% | 24.4 | 9.515 |
 
-Ratio FPS M2/M1 (misma corrida, detector compartido): video_01 \(16.826/5.096 \approx 3.30\times\); 720p \(\approx 1.20\text{–}1.39\times\). El sobrecosto de M1 es principalmente la segmentación de pretil.
+Ratio FPS M2/M1 (misma corrida): video_01 \(16.826/5.096 = 3.302\times\); video_02 \(1.293\times\); video_03 \(1.387\times\); video_04 \(1.204\times\). El sobrecosto de M1 es principalmente la segmentación de pretil.
 
 ### Entrenamiento YOLO-seg (verificación funcional)
 
@@ -86,7 +93,7 @@ Ratio FPS M2/M1 (misma corrida, detector compartido): video_01 \(16.826/5.096 \a
 
 ## Recomendación de producción
 
-**Método 1** para el estimador de pretil (mejor detect rate y robustez en samples). Método 2 como ablación y referencia de costo/FPS del módulo geométrico.
+**Método 1** para el estimador de pretil (mejor *berm detection rate* y robustez en samples). Método 2 como ablación y referencia de costo/FPS del módulo geométrico.
 
 ### Roadmap
 

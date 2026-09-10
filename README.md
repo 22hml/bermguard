@@ -127,4 +127,8 @@ python scripts/train_berm_seg.py --labels data/berm_seg/labels --device cuda --e
 - Sin calibración, proximidad y altura en **píxeles**.
 - CUDA en Docker no validado en GPU NVIDIA física en esta entrega.
 
-Ver `reporte_benchmark.md` para números exactos, trade-offs y recomendación.
+### Hardware
+
+Benchmarks de entrega en Apple Silicon (MPS). Contenedor `linux/amd64` validado con smoke test CPU. CUDA configurada en la imagen, no validada end-to-end sin host NVIDIA.
+
+Ver `reporte_benchmark.md` para la tabla completa por video, trade-offs y recomendación.
