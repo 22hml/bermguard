@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 AlertLevel = Literal["green", "yellow", "red"]
+BermStatus = Literal["detected", "edge_only", "unknown"]
 
 
 @dataclass
@@ -50,15 +51,27 @@ class BBox:
 
 @dataclass
 class BermEstimate:
-    """Estimación de pretil en un frame."""
+    """Estimación de pretil / borde en un frame.
 
-    crest_y: float
-    ground_y: float
-    height_px: float
-    height_m: float
-    meters_per_pixel: float
-    confidence: float
-    mask: object | None = None  # np.ndarray | None, evita import pesado aquí
+    ``status``:
+      - detected: cordón con cresta y pie independientes
+      - edge_only: solo borde de botadero (no equivale a pretil)
+      - unknown: sin evidencia confiable (no inventar geometría)
+    """
+
+    status: BermStatus = "unknown"
+    crest_y: float | None = None
+    ground_y: float | None = None
+    height_px: float | None = None
+    height_m: float | None = None
+    meters_per_pixel: float | None = None
+    scale_valid: bool = False
+    confidence: float = 0.0
+    reason: str = ""
+    mask: object | None = None
+    crest_polyline: list[tuple[float, float]] = field(default_factory=list)
+    ground_polyline: list[tuple[float, float]] = field(default_factory=list)
+    edge_polyline: list[tuple[float, float]] = field(default_factory=list)
 
 
 @dataclass
@@ -83,3 +96,4 @@ class VideoStats:
     alert_count: int
     mean_berm_height_m: float | None
     device: str
+    berm_detect_rate: float = 0.0

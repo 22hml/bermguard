@@ -1,12 +1,12 @@
-# Imagen orientada a evaluación Deliryum (Linux + NVIDIA CUDA).
-# Build en Apple Silicon: docker build --platform linux/amd64 -t deliryum/bermguard:latest .
+# BermGuard — runtime Linux + NVIDIA CUDA.
+# Apple Silicon: docker build --platform linux/amd64 -t bermguard:latest .
 
 FROM pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    YOLOT_CONFIG_DIR=/tmp/Ultralytics \
+    YOLO_CONFIG_DIR=/tmp/Ultralytics \
     ULTRALYTICS_OFFLINE=0
 
 WORKDIR /app
@@ -20,10 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Pesos en BUILD TIME (evaluación sin red)
-RUN mkdir -p /app/weights \
-    && python -c "from ultralytics import YOLO; YOLO('yolov8n.pt'); import pathlib, shutil; \
-src=next(pathlib.Path('.').rglob('yolov8n.pt')); shutil.copy(src, '/app/weights/yolov8n.pt'); print('weights', src)"
+# Pesos en build time (imagen autocontenida, sin red en runtime)
+COPY weights/yolov8n.pt /app/weights/yolov8n.pt
+COPY weights/berm_yolov8n_seg.pt /app/weights/berm_yolov8n_seg.pt
 
 ENV ULTRALYTICS_OFFLINE=1
 
@@ -32,5 +31,5 @@ COPY main.py /app/main.py
 COPY README.md /app/README.md
 COPY reporte_benchmark.md /app/reporte_benchmark.md
 
-ENTRYPOINT ["python", "main.py"]
-CMD ["--input", "/app/test", "--output", "/app/output", "--method", "1", "--weights", "/app/weights/yolov8n.pt"]
+# Override: python main.py --input /app/test --output /app/output --method 1
+CMD ["python", "main.py", "--input", "/app/test", "--output", "/app/output", "--method", "1"]

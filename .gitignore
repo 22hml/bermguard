@@ -25,26 +25,38 @@ htmlcov/
 .vscode/
 *.swp
 
-# Runtime outputs
+# Runtime outputs (locales / experimentales)
 output/
 output_docker/
+output_external/
+output_v2/
+output_v3/
 outputs/
 runs/
+dist/
+entrega/
 *.avi
 *.mkv
 
-# Large media (keep samples out of git; mount locally / Docker volumes)
+# Large media
 data/raw/
 data/videos/
+data/berm_seg/
+data/external/
+data/external_v2_in/
+data/samples_v02_only/
+data/samples_v34/
 *.mp4
 *.mov
 *.MP4
 
-# Model weights downloaded at build time can be large; keep a placeholder
+# Model weights (grandes; se incluyen en el zip de entrega)
 weights/*.pt
 weights/*.pth
 weights/*.onnx
 !weights/.gitkeep
+yolov8n-seg.pt
+sam_b.pt
 
 # Jupyter
 .ipynb_checkpoints/

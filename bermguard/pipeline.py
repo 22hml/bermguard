@@ -11,8 +11,9 @@ import cv2
 import numpy as np
 
 from bermguard.berm import estimate_berm_classical, estimate_berm_method1
+from bermguard.berm.temporal import BermTemporalFilter
 from bermguard.detectors import YoloVehicleDetector, ensure_weights
-from bermguard.geometry import estimate_meters_per_pixel, guideline_min_berm_m
+from bermguard.geometry import guideline_min_berm_m
 from bermguard.preprocess import enhance_frame, estimate_lighting_regime
 from bermguard.tracking import IoUTracker, proximity_level
 from bermguard.types import FrameResult, VideoStats
@@ -29,6 +30,7 @@ def run_pipeline(
     meters_per_pixel: float | None = None,
     device: str = "auto",
     max_frames: int | None = None,
+    berm_seg_weights: Path | None = None,
 ) -> None:
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -51,6 +53,9 @@ def run_pipeline(
         wpath = ensure_weights(weights_path)
         detector = YoloVehicleDetector(weights_path=wpath, device=device)
 
+    # Solo calibración explícita publica metros
+    scale_valid = meters_per_pixel is not None and meters_per_pixel > 0
+
     for video_path in videos:
         for m in methods:
             _process_video(
@@ -59,8 +64,10 @@ def run_pipeline(
                 method=m,
                 detector=detector,
                 meters_per_pixel=meters_per_pixel,
+                scale_valid=scale_valid,
                 max_frames=max_frames,
                 device=device if detector is None else detector.device,
+                berm_seg_weights=berm_seg_weights,
             )
 
 
@@ -70,8 +77,10 @@ def _process_video(
     method: str,
     detector: YoloVehicleDetector | None,
     meters_per_pixel: float | None,
+    scale_valid: bool,
     max_frames: int | None,
     device: str,
+    berm_seg_weights: Path | None = None,
 ) -> None:
     stem = video_path.stem
     out_sub = output_dir / f"{stem}_method{method}"
@@ -90,12 +99,13 @@ def _process_video(
     writer = cv2.VideoWriter(str(writer_path), fourcc, fps, (width, height))
 
     tracker = IoUTracker()
+    berm_filter = BermTemporalFilter(confirm=2, clear_after=2)
     frames_meta: list[FrameResult] = []
     alerts_all: list[dict[str, object]] = []
-    mpp_running: float | None = meters_per_pixel
 
     t0 = time.perf_counter()
     idx = 0
+    detect_count = 0
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -112,31 +122,46 @@ def _process_video(
             assert detector is not None
             detections = detector.detect(enhanced)
             detections = tracker.update(detections)
-        # Método 2: sin detector deep; solo pretil clásico (benchmark)
 
-        mpp = estimate_meters_per_pixel(
-            detections=detections,
-            frame_height=height,
-            override=mpp_running if mpp_running is not None else meters_per_pixel,
-        )
-        # Congelar escala: preferir primera observación con vehículos; si no, primer frame
-        if mpp_running is None:
-            if detections or idx == 0:
-                mpp_running = mpp
-        if mpp_running is not None:
-            mpp = mpp_running
+        # Escala solo para uso métrico si hay calibración explícita
+        mpp_for_metric = meters_per_pixel if scale_valid else None
 
         if method == "1":
-            berm = estimate_berm_method1(enhanced, detections, meters_per_pixel=mpp)
+            berm = estimate_berm_method1(
+                enhanced,
+                detections,
+                meters_per_pixel=mpp_for_metric,
+                scale_valid=scale_valid,
+                berm_seg_weights=berm_seg_weights,
+                device=device,
+            )
         else:
-            berm = estimate_berm_classical(enhanced, meters_per_pixel=mpp)
+            berm = estimate_berm_classical(
+                enhanced,
+                meters_per_pixel=mpp_for_metric,
+                scale_valid=scale_valid,
+            )
+        berm = berm_filter.update(berm)
+        if berm.status == "detected":
+            detect_count += 1
 
         level, dist_px, alerts = proximity_level(detections)
-        guide = guideline_min_berm_m()
-        if berm.height_m < guide * 0.75:
+
+        if berm.status != "detected":
             alerts.append(
-                f"PRETIL BAJO: {berm.height_m:.2f} m < 75% guía ({guide:.2f} m)"
+                "PRETIL: SIN DETECCIÓN CONFIABLE"
+                if berm.status == "unknown"
+                else "PRETIL: SOLO BORDE (sin cordón verificado)"
             )
+        elif berm.scale_valid and berm.height_m is not None:
+            guide = guideline_min_berm_m()
+            if berm.height_m < guide * 0.75:
+                alerts.append(
+                    f"PRETIL BAJO: {berm.height_m:.2f} m < 75% guía ({guide:.2f} m)"
+                )
+        elif berm.height_px is not None:
+            # Alerta relativa en px solo informativa; no se vende como metrología
+            alerts.append(f"PRETIL DETECTADO (~{berm.height_px:.0f}px, sin calibración m)")
 
         result = FrameResult(
             frame_idx=idx,
@@ -158,7 +183,6 @@ def _process_video(
             )
 
         osd = draw_osd(frame, result)
-        # Etiqueta de método / lighting
         cv2.putText(
             osd,
             f"method={method} | light={lighting}",
@@ -180,7 +204,17 @@ def _process_video(
     plot_berm_height(frames_meta, out_sub / "berm_height_vs_time.png")
     plot_spatial_distribution(frames_meta, out_sub / "vehicle_spatial_distribution.png")
 
-    heights = [f.berm.height_m for f in frames_meta if f.berm is not None]
+    heights = [
+        f.berm.height_m
+        for f in frames_meta
+        if f.berm is not None and f.berm.status == "detected" and f.berm.height_m is not None
+    ]
+    heights_px = [
+        f.berm.height_px
+        for f in frames_meta
+        if f.berm is not None and f.berm.status == "detected" and f.berm.height_px is not None
+    ]
+    detect_rate = detect_count / idx if idx else 0.0
     stats = VideoStats(
         video_name=video_path.name,
         method=method,
@@ -191,36 +225,51 @@ def _process_video(
         alert_count=len(alerts_all),
         mean_berm_height_m=float(np.mean(heights)) if heights else None,
         device=device,
+        berm_detect_rate=detect_rate,
     )
     metadata = {
         "video": video_path.name,
         "method": method,
         "device": device,
+        "resolution": {"width": width, "height": height},
         "fps_input": stats.fps_input,
         "frames_processed": stats.frames_processed,
         "wall_time_s": round(stats.wall_time_s, 3),
         "avg_throughput_fps": round(stats.avg_infer_fps, 3),
+        "berm_detect_rate": round(detect_rate, 3),
         "mean_berm_height_m": (
-            None
-            if stats.mean_berm_height_m is None
-            else round(stats.mean_berm_height_m, 3)
+            None if stats.mean_berm_height_m is None else round(stats.mean_berm_height_m, 3)
         ),
-        "guideline_min_berm_m": guideline_min_berm_m(),
-        "meters_per_pixel": mpp_running,
+        "mean_berm_height_px": (
+            None if not heights_px else round(float(np.mean(heights_px)), 1)
+        ),
+        "scale_calibrated": scale_valid,
+        "guideline_min_berm_m": guideline_min_berm_m() if scale_valid else None,
+        "meters_per_pixel": meters_per_pixel if scale_valid else None,
         "alert_count": stats.alert_count,
-        "alerts": alerts_all[:500],  # cap para no inflar
+        "alerts": alerts_all[:500],
         "artifacts": {
             "osd_video": writer_path.name,
             "berm_height_plot": "berm_height_vs_time.png",
             "spatial_plot": "vehicle_spatial_distribution.png",
         },
+        "notes": (
+            "height_m solo si --meters-per-pixel explícito; "
+            "pretil vía YOLO-seg si weights/berm_yolov8n_seg.pt existe; "
+            "unknown no inventa polígono."
+        ),
+        "berm_seg_weights": (
+            str(berm_seg_weights)
+            if berm_seg_weights is not None
+            else str(Path("weights/berm_yolov8n_seg.pt"))
+        ),
     }
     with open(out_sub / "metadata.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
     print(
         f"[OK] {video_path.name} method={method} -> {out_sub} "
-        f"({idx} frames, {stats.avg_infer_fps:.2f} FPS eff.)"
+        f"({idx} frames, {stats.avg_infer_fps:.2f} FPS, detect={detect_rate:.0%})"
     )
 
 

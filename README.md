@@ -1,113 +1,107 @@
 # BermGuard AI
 
-Pipeline de visión computacional para **detección de maquinaria pesada**, **estimación de altura de pretil** y **semáforo de proximidad** en botaderos mineros.
+Pipeline de visión computacional para **detección de maquinaria pesada (CAEX / bulldozer)**, **estimación de altura de pretil** respecto a la rasante operativa y **semáforo de proximidad** en botaderos mineros.
 
-Prueba técnica — Deliryum.AI · Ingeniero/a de IA (Visión por Computadora).
+## Artefactos por video (`--output/<stem>_methodN/`)
 
-## Qué hace
-
-Para cada video en `--input` genera un subdirectorio en `--output` con:
-
-1. Video OSD (`*_osd.mp4`) — cajas, máscara/líneas de pretil, semáforo de proximidad  
-2. `berm_height_vs_time.png` — altura estimada del pretil vs tiempo  
+1. `*_osd.mp4` — OSD: cajas, cresta/base del pretil, semáforo de proximidad  
+2. `berm_height_vs_time.png` — altura de pretil vs tiempo  
 3. `vehicle_spatial_distribution.png` — trayectoria espacial de vehículos  
-4. `metadata.json` — FPS, tiempos, alertas  
+4. `metadata.json` — FPS, tiempos, alertas, tasa de detección  
 
 ## Métodos (`--method`)
 
 | Valor | Descripción |
 |-------|-------------|
-| `1` | **YOLO (Ultralytics)** para vehículos + pretil clásico **anclado** a la base de bboxes |
-| `2` | **Solo OpenCV** (CLAHE → Canny → morfología → perfil de cresta/rasante) |
+| `1` | YOLO vehículos + **YOLO-seg de pretil** (`weights/berm_yolov8n_seg.pt`; fallback clásico OpenCV si no hay pesos) |
+| `2` | Solo OpenCV (CLAHE → gradientes → perfil cresta/rasante) |
 | `all` | Ejecuta ambos |
 
-## Modelo geométrico de altura (monocular)
+## Métrica de altura
 
-En faena real, sistemas comerciales de *berm monitoring* suelen usar **LiDAR** (±10 cm). Aquí resolvemos una **aproximación monocular** usable con cámaras existentes:
+\[
+H_{\mathrm{pretil}}(t) = y_{\mathrm{base}}(x,t) - y_{\mathrm{cresta}}(x,t)
+\]
 
-1. Estimar **cresta** del pretil (borde superior en ROI inferior).  
-2. Estimar **rasante** / suelo operativo (perfil + ancla a `y2` de vehículos en método 1).  
-3. `height_px = ground_y - crest_y`  
-4. `height_m ≈ height_px × meters_per_pixel`  
+Referenciada al plano del suelo operativo (coords de imagen; `y` crece hacia abajo). Se resume por mediana a lo largo del cordón. **Metros** solo si se pasa `--meters-per-pixel` (calibración explícita); si no, se reporta en píxeles.
 
-### Escala `meters_per_pixel`
-
-Prioridad:
-
-1. Flag `--meters-per-pixel` (calibración explícita)  
-2. Proxy por tamaño de bbox CAEX/truck y diámetro típico de neumático (~4.0 m), asumiendo que el neumático ocupa ~30% de la altura del vehículo en vista 3/4  
-3. Fallback: ~15 m de escena vertical / altura del frame  
-
-### Umbral operativo de referencia
-
-Buenas prácticas de botadero (cordón de seguridad): altura guía ≈ **50% del diámetro del neumático** del equipo que descarga. Se registra en `metadata.json` como `guideline_min_berm_m` y genera alerta si la estimación cae bajo ~75% de esa guía.
-
-> **Limitación:** sin profundidad activa ni calibración intrínseca/extrínseca completa, el error absoluto en metros puede ser alto. Priorizamos **estabilidad temporal**, alertas relativas y trazabilidad del método.
-
-## Requisitos locales (macOS / dev)
+## Instalación local
 
 ```bash
-cd bermguard
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Videos de muestra (no van en git):
-
 ```bash
-mkdir -p data
-ln -s "/ruta/a/Prueba Técnica - Pretil y Maquinaria Minera" data/samples
+python main.py --input data/samples --output output --method 1 --device cuda
+# o: --device mps | cpu | auto
 ```
 
-### Ejecutar
+Flags relevantes:
+
+- `--weights` — detector de vehículos (default `weights/yolov8n.pt`)
+- `--berm-seg-weights` — segmentación de pretil (default `weights/berm_yolov8n_seg.pt`)
+- `--meters-per-pixel` — escala monocular opcional
+- `--max-frames` — depuración
+
+## Docker (evaluación ciega)
+
+Imagen Linux + NVIDIA CUDA. Pesos embebidos en **build** (sin descargas en runtime).
 
 ```bash
-python main.py --input data/samples --output output --method 1 --device mps
-# smoke rápido:
-python main.py --input data/samples --output output --method 1 --max-frames 30 --device mps
-```
-
-## Docker (evaluación Deliryum)
-
-Imagen pensada para **Linux + NVIDIA CUDA**. Los pesos se embeben en **build time** (sin descargas en runtime).
-
-```bash
-docker build -t deliryum/bermguard:latest .
+docker build -t bermguard:latest .
 
 docker run --rm --gpus all \
   -v /ruta/local/test:/app/test \
   -v /ruta/local/output:/app/output \
-  deliryum/bermguard:latest \
-  --input /app/test --output /app/output --method 1 --weights /app/weights/yolov8n.pt
+  bermguard:latest \
+  python main.py --input /app/test --output /app/output --method 1
 ```
 
-En Apple Silicon el build CUDA puede requerir `--platform linux/amd64` (emulación, lento). Para smoke local preferir el venv nativo con MPS/CPU.
+Tag compatible con el brief: `deliryum/bermguard:latest` (alias opcional al build).
+
+Apple Silicon (emulación amd64, CPU):
+
+```bash
+docker build --platform linux/amd64 -t bermguard:latest .
+docker run --rm --platform linux/amd64 \
+  -v "$PWD/data/samples:/app/test:ro" \
+  -v "$PWD/output:/app/output" \
+  bermguard:latest \
+  python main.py --input /app/test --output /app/output --method 1 --device cpu
+```
+
+## Reentrenamiento de pretil (opcional)
+
+```bash
+python scripts/extract_frames.py --input data/samples --output data/berm_seg/raw_frames
+python scripts/curate_labels.py
+# o anotar a mano:
+python scripts/annotate_berm.py --labels data/berm_seg/labels
+python scripts/train_berm_seg.py --labels data/berm_seg/labels --device cuda --epochs 70
+```
 
 ## Estructura
 
 ```
 bermguard/
   main.py
-  bermguard/
-    pipeline.py
-    preprocess.py
-    detectors/yolo.py
-    berm/{classical,yolo_berm}.py
-    geometry/height.py
-    tracking/proximity.py
-    viz/{osd,plots}.py
-  weights/          # yolov8n.pt en imagen Docker / local tras primer run
   Dockerfile
+  requirements.txt
+  README.md
   reporte_benchmark.md
+  bermguard/           # pipeline, detectores, pretil, viz
+  scripts/             # extract / annotate / train seg
+  weights/             # yolov8n.pt + berm_yolov8n_seg.pt
+  output/              # artefactos de ejemplo (samples)
 ```
 
-## Entrega
+## Limitaciones (honestas)
 
-- Código tipado y modular  
-- `README.md` (este archivo)  
-- `Dockerfile`  
-- `reporte_benchmark.md`  
-- Carpeta `output/` con artefactos (generar antes de empaquetar; no versionar en git)
+- Altura monocular aproximada; no sustituye LiDAR/topografía.
+- Detector vehicular COCO no fine-tuned a CAEX/bulldozer de faena.
+- Segmentación de pretil entrenada sobre samples del brief; generaliza limitado a otras cámaras/ángulos.
+- Sin calibración, el semáforo de proximidad opera en **píxeles**, no en metros absolutos.
 
-Repo privado: https://github.com/22hml/bermguard
+Ver `reporte_benchmark.md` para comparación método 1 vs 2, FPS y recomendación de producción.

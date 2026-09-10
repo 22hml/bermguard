@@ -1,104 +1,90 @@
-# Reporte de Benchmark — BermGuard AI
+# Benchmark — BermGuard AI
 
 ## Objetivo
 
-Comparar al menos dos enfoques para segmentación/estimación de pretil y apoyo a detección vehicular bajo transiciones lumínicas, justificando el método recomendado para producción (precisión vs FPS/VRAM).
+Comparar dos enfoques de estimación de pretil (y apoyo a detección vehicular) bajo variaciones de iluminación, y justificar el método recomendado para producción (precisión vs FPS/VRAM).
 
-## Métodos evaluados
+## Métodos
 
-### Método 1 — YOLO + pretil anclado
+### Método 1 — YOLO vehículos + YOLO-seg pretil
 
 - **Detección:** YOLOv8n (COCO) → clases vehiculares mapeadas a CAEX / bulldozer / vehicle.
 - **Tracking:** IoU greedy frame-a-frame.
-- **Pretil:** OpenCV (Sobel vertical + crest/toe) + refinamiento si la base del bbox cae cerca de la rasante.
-- **Proximidad:** semáforo por distancia entre centros de bbox.
+- **Pretil:** YOLOv8n-seg fine-tuned sobre frames anotados de los videos del brief (`weights/berm_yolov8n_seg.pt`). Cresta y base derivadas de la máscara;  
+  \(H = y_{\mathrm{base}} - y_{\mathrm{cresta}}\) (mediana a lo largo del cordón).
+- **Fallback:** si no hay pesos de seg, perfil clásico OpenCV (borde ≠ cordón; estados `detected` / `edge_only` / `unknown`).
+- **Proximidad:** semáforo por distancia entre centros de bbox (umbrales en px sin calibración métrica).
+- **Metros:** solo con `--meters-per-pixel` explícito.
 
-### Método 2 — OpenCV clásico puro
+### Método 2 — OpenCV clásico
 
-- CLAHE + Sobel-Y + perfil de cresta/rasante en ROI inferior.
-- Sin red neuronal → baseline liviano para trade-off FPS/VRAM.
-- No genera detecciones vehiculares (el mapa espacial queda vacío o casi vacío).
+- CLAHE + Sobel-Y + perfil de cresta/rasante en ROI.
+- Sin red neuronal → baseline liviano (techo de FPS / ablación).
+- No genera detecciones vehiculares (mapa espacial vacío o casi vacío).
 
-## Benchmark completo (Apple M4 · MPS · sin `--max-frames`)
+## Resultados (samples del brief)
 
-Videos ~10 s c/u (`video_01` 302@30fps; `02–04` 240@24fps). Artefactos en `output/`.
+Corridas locales Apple Silicon (MPS) y validación Docker (linux/amd64, CPU smoke). Artefactos de referencia en `output/`.
 
-| Video | Método | Throughput (FPS) | Altura media (m) | Alertas | Notas |
-|-------|--------|------------------|------------------|---------|-------|
-| video_01 | 1 | 14.38 | 0.99 | 297 | Banda crest/toe visible; muchas alertas PRETIL BAJO |
-| video_01 | 2 | 22.49 | 0.95 | 266 | Solo geométrico |
-| video_02 | 1 | 29.80 | 2.44 | 68 | Escala m/px por neumático (~0.081); serie ruidosa |
-| video_02 | 2 | 51.18 | 1.09 | 156 | Fallback m/px fijo (~0.021) |
-| video_03 | 1 | 31.72 | 1.16 | 136 | Polvo; conf. YOLO baja en algunos frames |
-| video_03 | 2 | 50.77 | 0.93 | 208 | — |
-| video_04 | 1 | 31.89 | 1.04 | 194 | Bulldozer a veces etiquetado como CAEX |
-| video_04 | 2 | 49.88 | 1.20 | 129 | — |
+### Throughput (método 1 vs 2, videos completos · MPS · corrida de entrega)
 
-Guía operativa registrada: `guideline_min_berm_m = 2.0` (50% diámetro neumático 4.0 m). Alerta PRETIL BAJO si estimación &lt; ~75% de esa guía.
+| Video | Método 1 (FPS) | Método 2 (FPS) | Detect rate M1 | Altura media M1 (px) |
+|-------|----------------|----------------|----------------|----------------------|
+| video_01 | ~5–14* | ~20 | ~96% | ~72 |
+| video_02 | ~18 | ~34 | ~94% | ~44 |
+| video_03 | ~19 | ~35 | ~78% | ~54 |
+| video_04 | ~21 | ~36 | ~89% | ~55 |
 
-### Validación Docker (Linux/amd64 + CUDA image)
+\*Variación MPS/carga térmica en video_01 (1080p); en régimen suele situarse ~14 FPS. Método 2 es ~1.5–2× más rápido y no cubre maquinaria ni proximidad.
 
-- Build OK: `docker build --platform linux/amd64 -t deliryum/bermguard:latest .`
-- Smoke OK (5 frames × 4 videos, `--device cpu`): OSD + plots + `metadata.json` en `output_docker/`
-- Pin `numpy<2` requerido por PyTorch 2.2 de la imagen base
-- En Mac no hay `--gpus`; el runner de evaluación Deliryum debe usar `docker run --gpus all`
+Validación seg (hold-out interno del dataset bootstrap): mask mAP50 del orden ~0.7–0.95 según partición; **N pequeño** → no interpretar como GT industrial.
 
-VRAM CUDA: medir en el runner de evaluación con `nvidia-smi` (no disponible en Apple Silicon).
+### Docker
 
-## Observaciones de calidad visual (OSD)
-
-**Lo que funciona bien**
-
-- Método 1 dibuja cajas CAEX, IDs de track, semáforo de proximidad y overlay `method`/`light`.
-- En `video_01` la banda de pretil (crest/toe) se alinea con el cordón del botadero en varios frames (~0.8–1.1 m).
-- Plots de trayectoria espacial (método 1) muestran paths coherentes en el tiempo.
-- Throughput en régimen ≥ ~30 FPS (método 1) / ≥ ~50 FPS (método 2) en videos 02–04.
-
-**Debilidades honestas**
-
-- La altura monocular es **inestable frame-a-frame** (picos al techo ~3.5 m y caídas a pocos píxeles cuando el ridge se pierde por polvo o vehículos en primer plano).
-- Escala `meters_per_pixel` depende del video (fallback fijo vs proxy de neumático) → medias no son estrictamente comparables entre clips.
-- YOLO COCO confunde / pierde bulldozer bajo polvo; IDs de track se fragmentan → falsas alertas de proximidad crítica entre “dobles” del mismo vehículo.
-- Método 2 no aporta valor de negocio en detección/proximidad; solo techo de FPS y ablación geométrica.
+- Build: `docker build -t bermguard:latest .` (pesos en imagen; sin red en runtime).
+- Smoke: `--device cpu --max-frames 5` en amd64.
+- Pin `numpy>=1.24,<2` por compatibilidad con PyTorch 2.2 de la imagen base.
 
 ## Trade-offs
 
 | Criterio | Método 1 | Método 2 |
 |----------|----------|----------|
 | Detección maquinaria | Sí | No |
-| Semáforo proximidad | Sí | No (sin tracks) |
-| FPS | Medio (~14–32 MPS) | Alto (~22–51 MPS) |
-| VRAM | Requiere GPU en producción | CPU suficiente |
-| Robustez noche/polvo | Mejor con CLAHE + detector | Frágil si el ridge desaparece |
-| Altura pretil | Comparable + ancla a bbox | Baseline geométrico |
+| Semáforo proximidad | Sí | No |
+| Pretil (seg entrenada) | Sí (si hay pesos) | Perfil clásico |
+| FPS | Medio | Alto |
+| VRAM | GPU recomendada | CPU suficiente |
+| Robustez noche/polvo | Mejor | Frágil si el ridge desaparece |
 
-## Hiperparámetros relevantes
+## Hiperparámetros
 
-- YOLO: `conf=0.25`, `iou=0.45`, `imgsz=640`, pesos `yolov8n.pt`
-- Proximidad: amarillo ≤ 180 px, rojo ≤ 90 px (centros)
-- Pretil: ROI vertical 40–92% del frame; altura acotada a ~0.4–3.5 m vía `meters_per_pixel`
-- Escala: neumático CAEX ref. 4.0 m; guía de cordón = 50% diámetro
+- YOLO detect: `conf=0.25`, `iou=0.45`, `imgsz=640`, `yolov8n.pt`
+- YOLO-seg pretil: `conf≈0.15`, filtro de espesor (rechaza muros/horizonte), enmascara vehículos
+- Proximidad: amarillo ≤ 180 px, rojo ≤ 90 px (centros de bbox)
+- Temporal: confirmación 2 frames / clear 2 frames
+- Escala opcional: `--meters-per-pixel`; guía operativa 2.0 m (50% diámetro neumático 4.0 m) solo si hay metros
 
 ## Recomendación de producción
 
-**Método 1**, porque aporta el valor de negocio completo (maquinaria + proximidad + pretil). El método 2 queda como:
+**Método 1**, porque cubre el flujo completo del brief (maquinaria + proximidad + pretil). El método 2 queda como:
 
-- benchmark de techo de FPS,
-- fallback diagnóstico si el detector falla,
-- y ablación del módulo geométrico.
+- techo de FPS,
+- fallback diagnóstico,
+- ablación del módulo geométrico.
 
-Mejoras prioritarias post-entrega (si hay iteración):
+### Roadmap
 
-1. Suavizado temporal / Kalman en altura de pretil  
-2. Fine-tune o clases mineras (CAEX vs bulldozer)  
-3. Calibración de cámara o escala por escena fija para comparar videos  
-4. TensorRT / half-precision en el runner CUDA  
+1. Más anotaciones frame-a-frame y negativos (pista / polvo)  
+2. Fine-tune detector a CAEX vs bulldozer  
+3. Calibración de cámara o escala fija por escena  
+4. TensorRT / half-precision en CUDA  
 
-En un despliegue industrial real, la medición metrológica del pretil debería respaldarse con **LiDAR / stereo**; la cámara aporta cobertura, tracking y alertas tempranas sobre infraestructura existente (alineado al producto Deliryum).
+En faena, la metrología del pretil debería respaldarse con **LiDAR / stereo**; la cámara aporta cobertura, tracking y alertas sobre infraestructura existente.
 
-## Limitaciones honestas
+## Limitaciones
 
-- Escala monocular aproximada; no sustituye topografía.
-- YOLO COCO no está fine-tuned a CAEX/bulldozer de faena.
-- Videos de muestra sintéticos / controlados; la evaluación ciega puede diferir.
-- Sin TensorRT en esta entrega (imagen CUDA runtime genérica).
+- Altura monocular aproximada; no sustituye topografía.
+- Dataset de seg acotado a los 4 videos del brief → riesgo de sobreajuste a esas cámaras.
+- YOLO COCO no fine-tuned a equipos mineros; tracks pueden fragmentarse.
+- Sin calibración, proximidad y altura en **píxeles**, no metros absolutos.
+- Sin TensorRT en la imagen actual (CUDA runtime genérica).

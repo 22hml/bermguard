@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="1",
         choices=["1", "2", "all"],
-        help="Método: 1=YOLO+heurística, 2=clásico OpenCV, all=ambos.",
+        help="Método: 1=YOLO+seg pretil, 2=clásico OpenCV, all=ambos.",
     )
     parser.add_argument(
         "--weights",
@@ -60,7 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-frames",
         type=int,
         default=None,
-        help="Limitar frames (útil para smoke tests).",
+        help="Limitar frames (útil para depuración).",
+    )
+    parser.add_argument(
+        "--berm-seg-weights",
+        type=Path,
+        default=Path("weights/berm_yolov8n_seg.pt"),
+        help="Pesos YOLO-seg del pretil (si no existen, fallback clásico).",
     )
     return parser
 
@@ -78,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
             input_dir=args.input,
             output_dir=args.output,
             method=args.method,
+            berm_seg_weights=args.berm_seg_weights,
             weights_path=args.weights,
             meters_per_pixel=args.meters_per_pixel,
             device=args.device,
